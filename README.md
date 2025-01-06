@@ -153,19 +153,39 @@ JDBC와 JPA의 성능 비교: 일대다 관계에서 각각의 방식이 실제 
 | **JPA**  | 1240ms          | 1.24ms           |
 | **JDBC** | 958ms           | 0.96ms           |
 
-#### 성능 분석
-- **JDBC**는 **JPA 대비 약 3배 빠른 성능**을 보였습니다.
-- **트랜잭션 내에서 `batchUpdate`와 `LAST_INSERT_ID()`를 조합**해 안정적인 데이터 삽입과 PK 추적을 보장했습니다.
 
 #### 프로파일러 분석
 - 아래는 **JDBC**와 **JPA**의 성능 차이를 보여주는 **프로파일러 결과**입니다.
 
+##### JDBC
+- batchInsert 작업이 효율적으로 작동하며, 데이터베이스 작업이 주요 병목 지점임을 확인했습니다.
+  프로파일러 결과에 따르면, batchUpdate 메서드에서 모든 데이터가 한 번에 삽입되며, 추가적인 로직 처리 시간이 최소화되었습니다.
+  데이터 삽입 과정에서의 병목은 주로 데이터베이스 I/O 작업에서 발생하지만, JPA 대비 상당히 효율적임을 확인할 수 있었습니다.
+##### JPA
+- save 메서드에서 다수의 insert 작업이 개별적으로 실행되며, 트랜잭션 오버헤드가 주요 병목 지점으로 작용했습니다.
+각 단건 작업이 독립적으로 처리되면서, JDBC의 batchInsert 방식에 비해 비효율적임을 확인할 수 있었습니다.
+플레임 그래프에서 트랜잭션 관리 및 개별 persist 호출로 인해 작업 시간이 길어지는 양상이 드러났습니다.
+
+
+##### 플레임 그래프 비교
+- **JDBC**
+batchUpdate 메서드 호출로 모든 데이터가 한 번에 삽입되는 구조를 확인.
+데이터베이스 작업이 주요 병목이지만, JPA 대비 간소화된 작업 흐름을 보여줌.
+
+- **JPA**
+개별적으로 처리되는 persist 호출이 반복되며, 각각의 트랜잭션 오버헤드가 병목으로 나타남.
+saveAll 메서드 내에서 발생하는 단일 작업의 누적 시간이 JDBC 대비 높은 것으로 확인됨.
+
+
+
+
 #### JPA 실행 결과
 ![JPA Performance](docs/images/jpa_performance.png)
+![Flame Graph ](docs/images/jpa_performance_flame.png)
 
 #### JDBC 실행 결과
 ![JDBC Performance](docs/images/jdbc_performance.png)
-
+![Flame Graph ](docs/images/jdbc_performance_flame.png)
 ---
 
 ### 테스트 환경
