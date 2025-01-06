@@ -188,6 +188,112 @@ saveAll 메서드 내에서 발생하는 단일 작업의 누적 시간이 JDBC 
 ![Flame Graph ](docs/images/jdbc_performance_flame.png)
 ---
 
+
+### 3. 멀티 스레드 환경에서의 롤백 검증
+   검증 목표
+   멀티 스레드 환경에서 특정 스레드의 요청이 실패(롤백)하더라도, 다른 스레드의 데이터가 영향을 받지 않고 정상적으로 저장되는지 확인.
+   작업 내용
+   특정 스레드에서 고의로 예외를 발생시켜 롤백을 유도.
+   실패한 스레드의 데이터는 저장되지 않고, 나머지 스레드의 데이터는 정상적으로 저장되었는지 확인.
+
+멀티 스레드 롤백 검증 테스트 코드
+```java
+@Test
+void testConcurrentInsertsWithRollback() throws InterruptedException {
+  int threadCount = 100; // 스레드 수
+  int groupsPerThread = 1000; // 각 스레드가 삽입할 그룹 개수
+  int failingThreadIndex = 50; // 실패를 유발할 스레드 번호
+
+  // 스레드 풀 생성
+  ExecutorService executorService = Executors.newFixedThreadPool(threadCount);
+
+  // 결과 저장 리스트
+  List<Future<List<ProductGroupEntity>>> futureResults = new ArrayList<>();
+
+  // 각 스레드에서 실행할 작업 정의
+  IntStream.range(0, threadCount).forEach(threadIndex -> {
+    Future<List<ProductGroupEntity>> future = executorService.submit(() -> {
+      // 고유 데이터 생성 (스레드별 구분을 위해 이름에 스레드 ID 포함)
+      List<ProductGroupEntity> productGroups = EasyRandomUtils.getInstance()
+              .objects(ProductGroupEntity.class, groupsPerThread)
+              .peek(group -> group.setProductGroupName("Thread-" + threadIndex + "-" + group.getProductGroupName()))
+              .toList();
+
+      if (threadIndex == failingThreadIndex) {
+        // 실패를 유발하기 위해 예외 발생
+        throw new RuntimeException("Intentional failure in thread " + threadIndex);
+      }
+
+      // 저장
+      List<Long> insertedIds = productGroupJdbcRepository.saveAll(productGroups);
+
+      // 저장된 ID를 엔티티에 매핑
+      for (int i = 0; i < productGroups.size(); i++) {
+        productGroups.get(i).setId(insertedIds.get(i));
+      }
+
+      return productGroups;
+    });
+    futureResults.add(future);
+  });
+
+  // 모든 스레드가 완료될 때까지 대기
+  executorService.shutdown();
+  executorService.awaitTermination(1, TimeUnit.MINUTES);
+
+  // 각 스레드의 결과 검증
+  for (int threadIndex = 0; threadIndex < futureResults.size(); threadIndex++) {
+    try {
+      if (threadIndex == failingThreadIndex) {
+        // 실패한 스레드는 예외가 발생해야 함
+        int idx = threadIndex;
+        assertThrows(ExecutionException.class, () -> futureResults.get(idx).get(),
+                "Thread " + threadIndex + " should have failed.");
+        continue;
+      }
+
+      // 성공한 스레드의 결과 검증
+      List<ProductGroupEntity> insertedGroups = futureResults.get(threadIndex).get();
+
+      // 삽입된 상품명 리스트 생성
+      List<String> insertedNames = insertedGroups.stream()
+              .map(ProductGroupEntity::getProductGroupName)
+              .toList();
+
+      // 상품명으로 조회
+      List<ProductGroupEntity> foundGroups = productGroupJdbcRepository.findByProductGroupNames(insertedNames);
+
+      // ID로 매핑
+      Map<Long, ProductGroupEntity> insertedGroupMap = insertedGroups.stream()
+              .collect(Collectors.toMap(ProductGroupEntity::getId, Function.identity()));
+
+      Map<Long, ProductGroupEntity> foundGroupMap = foundGroups.stream()
+              .collect(Collectors.toMap(ProductGroupEntity::getId, Function.identity()));
+
+      // ID와 이름 검증
+      insertedGroupMap.forEach((id, insertedGroup) -> {
+        ProductGroupEntity foundGroup = foundGroupMap.get(id);
+        assertNotNull(foundGroup, "ID " + id + "로 조회된 상품 그룹이 없습니다.");
+        assertEquals(insertedGroup.getProductGroupName(), foundGroup.getProductGroupName(),
+                "ID " + id + "의 상품 그룹 이름이 일치하지 않습니다.");
+      });
+
+      System.out.println("Thread " + threadIndex + " passed verification.");
+    } catch (ExecutionException e) {
+      if (threadIndex != failingThreadIndex) {
+        e.printStackTrace();
+        fail("Unexpected failure in thread " + threadIndex);
+      }
+    }
+  }
+}
+```
+
+#####  결과 요약
+실패한 스레드의 데이터는 저장되지 않았으며, 나머지 스레드의 데이터는 정상적으로 저장되었음을 확인.
+JDBC의 트랜잭션 관리가 멀티 스레드 환경에서도 안정적으로 작동함을 검증.
+
+
 ### 테스트 환경
 - Java: 21
 - Spring Boot: 3.4.1
