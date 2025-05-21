@@ -21,6 +21,34 @@ JDBC와 JPA의 성능 비교: 일대다 관계에서 각각의 방식이 실제 
 
 ---
 
+
+## 프로젝트 결과
+### ✅ 이 결과가 가능한 이유
+
+MySQL InnoDB에서 AUTO_INCREMENT는 내부적으로 다음과 같은 방식으로 작동한다:
+
+- `AUTO_INCREMENT`는 **INSERT 문 단위로 ID 블럭을 한꺼번에 선점**한다.
+- `innodb_autoinc_lock_mode = 1` (기본값)에서는, 다중 row를 한 번에 삽입하는 statement에 대해 **ID 범위를 미리 할당**하고, 이후에 해당 범위 내에서 row들이 실제 삽입된다.
+- `LAST_INSERT_ID()`는 해당 INSERT 문에서 할당된 **첫 번째 ID**를 반환한다.
+- 이 ID는 **세션 단위로 보장**되며, 같은 connection 내에서 안전하게 사용할 수 있다.
+
+---
+
+### 🧠 정리
+
+- JDBC Batch를 통해 여러 INSERT 문을 수행하더라도, `rewriteBatchedStatements=true` 설정을 통해 각 배치가 **하나의 INSERT statement로 재작성**된다면, MySQL은 **해당 statement 전체에 대해 ID 블럭을 미리 선점**한다.
+- 이로 인해 각 배치 실행 후 `LAST_INSERT_ID()`는 **해당 블럭의 첫 번째 ID를 안정적으로 반환**하며, **ID 충돌이나 비순차적 현상 없이 일관된 결과**를 보장할 수 있다.
+
+---
+
+### ✅ 참고 설정
+
+```properties
+spring.datasource.hikari.data-source-properties.rewriteBatchedStatements=true
+```
+해당 설정이 없으면 JDBC가 각 INSERT를 별도 statement로 실행하므로, LAST_INSERT_ID 결과가 일관되지 않을 수 있다.
+
+
 ## 프로젝트 구조
 
 ### 엔티티
