@@ -1,14 +1,15 @@
 package com.ryuqq.mysql_bluk_insert_test;
 
-import org.jeasy.random.EasyRandom;
+import java.util.List;
+
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.annotation.Import;
 import org.springframework.test.context.ActiveProfiles;
-
-import java.util.List;
 
 @SpringBootTest
 @ActiveProfiles("test")
@@ -18,23 +19,19 @@ class ProductGroupContextJdbcTest {
     @Autowired
     private ProductGroupContextRegister productGroupContextRegister;
 
-    private List<ProductGroupEntity> productGroups;
-    private List<ProductEntity> products;
+    List<ProductGroupContextCommand> productGroupContextCommands;
 
-    @BeforeEach
-    void setUp() {
-        EasyRandom easyRandom = EasyRandomUtils.getInstance();
-        productGroups = easyRandom.objects(ProductGroupEntity.class, 1000).toList();
-        products = easyRandom.objects(ProductEntity.class, 10000).toList();
-    }
+    @ParameterizedTest
+    @ValueSource(ints = {100, 1000, 10000})
+    void saveProductGroupWithProducts(int count) {
+        // 해당 count에 맞는 테스트 데이터 생성
+        productGroupContextCommands = ProductGroupContextCommandFactory.createContextCommand(count);
 
-    @Test
-    void saveProductGroupWithProducts() {
         long startTime = System.currentTimeMillis();
-        productGroupContextRegister.saveProductGroupWithProducts(productGroups, products);
+        productGroupContextRegister.saveProductGroupWithProducts(productGroupContextCommands);
         long endTime = System.currentTimeMillis();
-        System.out.println("[JDBC] Execution Time: " + (endTime - startTime) + "ms");
 
+        System.out.println("[JDBC] Execution Time for " + count + " commands: " + (endTime - startTime) + "ms");
     }
 
 }

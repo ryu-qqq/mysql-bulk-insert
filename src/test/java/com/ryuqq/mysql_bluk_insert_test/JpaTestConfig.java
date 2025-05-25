@@ -16,8 +16,8 @@ public class JpaTestConfig {
 
     @Bean
     @Primary
-    public ProductPersistenceRepository testProductRepository(NamedParameterJdbcTemplate namedParameterJdbcTemplate) {
-        return new ProductJdbcRepository(namedParameterJdbcTemplate);
+    public ProductPersistenceRepository testProductRepository(ProductJpaRepository productJpaRepository) {
+        return new ProductJpaPersistenceRepository(productJpaRepository);
     }
 
 }

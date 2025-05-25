@@ -3,6 +3,7 @@ package com.ryuqq.mysql_bluk_insert_test;
 import jakarta.transaction.Transactional;
 import org.springframework.stereotype.Component;
 
+import java.util.ArrayList;
 import java.util.List;
 
 @Component
@@ -17,17 +18,29 @@ public class ProductGroupContextRegister {
     }
 
     @Transactional
-    public void saveProductGroupWithProducts(List<ProductGroupEntity> productGroups, List<ProductEntity> products) {
-        List<Long> productGroupIds = productGroupRegister.saveAll(productGroups);
+    public void saveProductGroupWithProducts(List<ProductGroupContextCommand> productGroupContextCommands) {
 
-        List<ProductEntity> updatedProducts = products.stream()
-                .peek(product -> {
-                    int index = products.indexOf(product) % productGroupIds.size();
-                    product.setProductGroupId(productGroupIds.get(index));
-                })
+        List<ProductGroupEntity> productGroupEntities = productGroupContextCommands.stream()
+            .map(productGroupContextCommand -> productGroupContextCommand.getProductGroupCommand().toEntity())
+            .toList();
+
+
+        List<Long> productGroupIds = productGroupRegister.saveAll(productGroupEntities);
+
+        List<ProductEntity> products = new ArrayList<>();
+
+        for (int i = 0; i < productGroupIds.size(); i++) {
+            Long productGroupId = productGroupIds.get(i);
+            List<ProductEntity> productEntities = productGroupContextCommands.get(i)
+                .getProductCommands()
+                .stream()
+                .map(p -> p.toEntity(productGroupId))
                 .toList();
 
-        productRegister.saveAll(updatedProducts);
+            products.addAll(productEntities);
+        }
+
+        productRegister.saveAll(products);
     }
 
 }

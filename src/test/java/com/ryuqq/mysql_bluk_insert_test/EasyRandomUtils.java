@@ -18,6 +18,7 @@ public class EasyRandomUtils {
     static {
         EasyRandomParameters parameters = new EasyRandomParameters()
                 .excludeField(named("id"))
+                .excludeField(named("productGroupId"))
                 .randomize(String.class, new StringRandomizer(10))
                 .randomize(Integer.class, new IntegerRangeRandomizer(0, 100));
 

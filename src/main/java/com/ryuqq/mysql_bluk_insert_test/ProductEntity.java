@@ -8,7 +8,7 @@ public class ProductEntity {
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
-    private long id;
+    private Long id;
 
     @Column(name = "PRODUCT_GROUP_ID", nullable = false)
     private long productGroupId;
@@ -18,7 +18,9 @@ public class ProductEntity {
 
     protected ProductEntity(){}
 
-    public ProductEntity(int quantity) {
+    public ProductEntity(Long id, long productGroupId, int quantity) {
+        this.id = id;
+        this.productGroupId = productGroupId;
         this.quantity = quantity;
     }
 
