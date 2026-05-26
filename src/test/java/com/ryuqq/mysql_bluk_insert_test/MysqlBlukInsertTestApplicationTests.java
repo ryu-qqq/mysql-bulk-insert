@@ -1,13 +1,12 @@
 package com.ryuqq.mysql_bluk_insert_test;
 
 import org.junit.jupiter.api.Test;
-import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.context.annotation.Import;
 
-@SpringBootTest
-class MysqlBlukInsertTestApplicationTests {
+@Import(JdbcTestConfig.class)
+class MysqlBlukInsertTestApplicationTests extends AbstractIntegrationTest {
 
     @Test
     void contextLoads() {
     }
-
 }

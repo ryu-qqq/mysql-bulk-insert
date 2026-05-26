@@ -1,7 +1,7 @@
 package com.ryuqq.mysql_bluk_insert_test;
 
-import jakarta.transaction.Transactional;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -21,9 +21,8 @@ public class ProductGroupContextRegister {
     public void saveProductGroupWithProducts(List<ProductGroupContextCommand> productGroupContextCommands) {
 
         List<ProductGroupEntity> productGroupEntities = productGroupContextCommands.stream()
-            .map(productGroupContextCommand -> productGroupContextCommand.getProductGroupCommand().toEntity())
-            .toList();
-
+                .map(context -> context.productGroupCommand().toEntity())
+                .toList();
 
         List<Long> productGroupIds = productGroupRegister.saveAll(productGroupEntities);
 
@@ -32,15 +31,14 @@ public class ProductGroupContextRegister {
         for (int i = 0; i < productGroupIds.size(); i++) {
             Long productGroupId = productGroupIds.get(i);
             List<ProductEntity> productEntities = productGroupContextCommands.get(i)
-                .getProductCommands()
-                .stream()
-                .map(p -> p.toEntity(productGroupId))
-                .toList();
+                    .productCommands()
+                    .stream()
+                    .map(p -> p.toEntity(productGroupId))
+                    .toList();
 
             products.addAll(productEntities);
         }
 
         productRegister.saveAll(products);
     }
-
 }

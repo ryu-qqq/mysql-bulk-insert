@@ -5,10 +5,14 @@ import java.util.List;
 
 import org.jeasy.random.EasyRandom;
 
-public class ProductGroupContextCommandFactory {
+public final class ProductGroupContextCommandFactory {
 
-    public static List<ProductGroupContextCommand> createContextCommand(int size){
-        EasyRandom easyRandom = EasyRandomUtils.getInstance();
+    private ProductGroupContextCommandFactory() {
+        // util — 인스턴스화 금지
+    }
+
+    public static List<ProductGroupContextCommand> createContextCommand(int size) {
+        EasyRandom easyRandom = EasyRandomUtils.INSTANCE;
 
         List<ProductGroupContextCommand> commands = new ArrayList<>();
 

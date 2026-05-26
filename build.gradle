@@ -2,6 +2,7 @@ plugins {
     id 'java'
     id 'org.springframework.boot' version '3.4.1'
     id 'io.spring.dependency-management' version '1.1.7'
+    id 'me.champeau.jmh' version '0.7.2'
 }
 
 group = 'com.ryuqq'
@@ -20,13 +21,57 @@ repositories {
 dependencies {
     implementation 'org.springframework.boot:spring-boot-starter-data-jpa'
     implementation 'org.springframework.boot:spring-boot-starter'
+    // UUIDv7 (RFC 9562) 생성기 — time-ordered, MySQL InnoDB B-Tree fragmentation 완화
+    implementation 'com.github.f4b6a3:uuid-creator:5.3.7'
     runtimeOnly 'com.mysql:mysql-connector-j'
+
     testImplementation 'org.springframework.boot:spring-boot-starter-test'
+    testImplementation 'org.springframework.boot:spring-boot-testcontainers'
     testImplementation "org.jeasy:easy-random-core:5.0.0"
+    // Docker 29.x 의 daemon API (≥ 1.44) 호환 — testcontainers 2.x 필수
+    // (1.x 는 shaded docker-java 가 API 1.32 사용 → BadRequest)
+    // marketplace 프로젝트와 동일 버전 사용. 2.x 에서 artifact 이름 변경됨.
+    testImplementation 'org.testcontainers:testcontainers:2.0.3'
+    testImplementation 'org.testcontainers:testcontainers-mysql:2.0.3'
+    testImplementation 'org.testcontainers:testcontainers-junit-jupiter:2.0.3'
 
     testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+
+    // JMH 벤치마크 ─ jmh source set 에 추가
+    jmh 'org.openjdk.jmh:jmh-core:1.37'
+    jmh 'org.openjdk.jmh:jmh-generator-annprocess:1.37'
+    jmhAnnotationProcessor 'org.openjdk.jmh:jmh-generator-annprocess:1.37'
 }
 
 tasks.named('test') {
     useJUnitPlatform()
+
+    // Docker Desktop 29.x + TestContainers 호환: marketplace 프로젝트와 동일 트릭
+    // - DOCKER_HOST: docker-java 가 직접 통신할 daemon socket
+    // - TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE: Ryuk/sibling 컨테이너가 mount 할 socket path
+    environment 'DOCKER_HOST', "unix://${System.getProperty('user.home')}/.docker/run/docker.sock"
+    environment 'TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE', '/var/run/docker.sock'
+
+    maxParallelForks = 1
+}
+
+// ─── JMH 설정 ───────────────────────────────────────────────────────────
+// 실행: ./gradlew jmh
+// 결과: build/results/jmh/results.json  (Phase 4 에서 GitHub Actions 가 SVG 차트로 변환)
+jmh {
+    includeTests = true                              // test classpath 접근 (JdbcTestConfig 등)
+    warmupIterations = 3
+    warmup = '3s'                                    // 각 워밍업 iteration 시간
+    iterations = 5
+    timeOnIteration = '5s'                           // 각 측정 iteration 시간
+    fork = 1
+    jvmArgs = [
+            '-Xms2G', '-Xmx2G',
+            "-Ddocker.host=unix://${System.getProperty('user.home')}/.docker/run/docker.sock"
+    ]
+    resultFormat = 'JSON'
+    resultsFile = project.file("${project.layout.buildDirectory.get()}/results/jmh/results.json")
+    duplicateClassesStrategy = DuplicatesStrategy.WARN
+    failOnError = true                               // setup fail 시 첫 에러에서 빌드 중단 + 로그 노출
+    verbosity = 'EXTRA'                              // 자세한 진단 로그
 }

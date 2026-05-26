@@ -2,30 +2,25 @@ package com.ryuqq.mysql_bluk_insert_test;
 
 import org.jeasy.random.EasyRandom;
 import org.jeasy.random.EasyRandomParameters;
-import org.jeasy.random.randomizers.range.BigDecimalRangeRandomizer;
 import org.jeasy.random.randomizers.range.IntegerRangeRandomizer;
-import org.jeasy.random.randomizers.range.LongRangeRandomizer;
 import org.jeasy.random.randomizers.text.StringRandomizer;
-
-import java.math.BigDecimal;
-import java.util.Map;
 
 import static org.jeasy.random.FieldPredicates.named;
 
-public class EasyRandomUtils {
-    private static final EasyRandom easyRandom;
+public final class EasyRandomUtils {
 
-    static {
+    public static final EasyRandom INSTANCE = build();
+
+    private EasyRandomUtils() {
+        // util — 인스턴스화 금지
+    }
+
+    private static EasyRandom build() {
         EasyRandomParameters parameters = new EasyRandomParameters()
                 .excludeField(named("id"))
                 .excludeField(named("productGroupId"))
                 .randomize(String.class, new StringRandomizer(10))
                 .randomize(Integer.class, new IntegerRangeRandomizer(0, 100));
-
-        easyRandom = new EasyRandom(parameters);
-    }
-
-    public static EasyRandom getInstance() {
-        return easyRandom;
+        return new EasyRandom(parameters);
     }
 }

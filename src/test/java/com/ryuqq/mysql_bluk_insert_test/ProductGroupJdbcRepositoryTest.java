@@ -1,191 +1,180 @@
 package com.ryuqq.mysql_bluk_insert_test;
 
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.annotation.Import;
-import org.springframework.test.context.ActiveProfiles;
+import org.springframework.jdbc.core.JdbcTemplate;
 
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.*;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 import java.util.function.Function;
+import java.util.function.IntPredicate;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.fail;
 
-@SpringBootTest
-@ActiveProfiles("test")
+/**
+ * JDBC Batch + {@code LAST_INSERT_ID()} 의 멀티 스레드 환경 동작 검증.
+ *
+ * <p>두 시나리오:
+ * <ol>
+ *   <li>모든 스레드 정상 — PK 추적이 스레드 간 섞이지 않는지</li>
+ *   <li>일부 스레드 실패 — 실패 스레드만 롤백되고 나머지는 영향 없는지</li>
+ * </ol>
+ */
 @Import(JdbcTestConfig.class)
-class ProductGroupJdbcRepositoryTest {
+class ProductGroupJdbcRepositoryTest extends AbstractIntegrationTest {
+
+    private static final int THREAD_COUNT = 100;
+    private static final int GROUPS_PER_THREAD = 1_000;
+    private static final int FAILING_THREAD_INDEX = 50;
+    private static final long AWAIT_TIMEOUT_SECONDS = 60;
 
     @Autowired
     private ProductGroupJdbcRepository productGroupJdbcRepository;
 
+    @Autowired
+    private JdbcTemplate jdbcTemplate;
+
+    @AfterEach
+    void cleanup() {
+        jdbcTemplate.execute("TRUNCATE TABLE PRODUCT_TEST");
+        jdbcTemplate.execute("TRUNCATE TABLE PRODUCT_GROUP_TEST");
+    }
+
     @Test
-    void testConcurrentInserts() throws InterruptedException {
-        int threadCount = 100; // 스레드 수
-        int groupsPerThread = 1000; // 각 스레드가 삽입할 그룹 개수
+    @DisplayName("100 스레드 × 1,000건 동시 삽입 시 LAST_INSERT_ID()는 각 스레드의 PK를 정확히 추적한다")
+    void concurrentInserts_trackPrimaryKeysCorrectly() throws InterruptedException {
+        List<List<ProductGroupEntity>> results =
+                runConcurrentInserts(THREAD_COUNT, GROUPS_PER_THREAD, idx -> false);
 
-        // 스레드 풀 생성
-        ExecutorService executorService = Executors.newFixedThreadPool(threadCount);
+        assertThat(results).hasSize(THREAD_COUNT);
+        results.forEach(this::verifyPersistedDataMatches);
+    }
 
-        // 결과 저장 리스트
-        List<Future<List<ProductGroupEntity>>> futureResults = new ArrayList<>();
+    @Test
+    @DisplayName("멀티 스레드 중 한 스레드만 실패 시 나머지 스레드 데이터는 정상 저장된다")
+    void concurrentInserts_isolateFailedThread() throws InterruptedException {
+        List<List<ProductGroupEntity>> results = runConcurrentInserts(
+                THREAD_COUNT, GROUPS_PER_THREAD,
+                idx -> idx == FAILING_THREAD_INDEX
+        );
 
-        // 각 스레드에서 실행할 작업 정의
-        IntStream.range(0, threadCount).forEach(threadIndex -> {
-            Future<List<ProductGroupEntity>> future = executorService.submit(() -> {
-                // 고유 데이터 생성 (스레드별 구분을 위해 이름에 스레드 ID 포함)
-                List<ProductGroupEntity> productGroups = EasyRandomUtils.getInstance()
-                        .objects(ProductGroupEntity.class, groupsPerThread)
-                        .peek(group -> group.setProductGroupName("Thread-" + threadIndex + "-" + group.getProductGroupName()))
-                        .toList();
+        assertThat(results)
+                .as("실패 스레드를 제외한 결과만 수집되어야 함")
+                .hasSize(THREAD_COUNT - 1);
+        results.forEach(this::verifyPersistedDataMatches);
+    }
 
-                // 저장
-                List<Long> insertedIds = productGroupJdbcRepository.saveAll(productGroups);
+    /**
+     * threadCount 개 스레드를 띄워 각각 groupsPerThread 건씩 batch insert.
+     * shouldFail 이 true 인 인덱스의 스레드는 예외 발생 → 결과에서 제외.
+     */
+    private List<List<ProductGroupEntity>> runConcurrentInserts(
+            int threadCount,
+            int groupsPerThread,
+            IntPredicate shouldFail
+    ) throws InterruptedException {
+        ExecutorService executor = Executors.newFixedThreadPool(threadCount);
+        List<Future<List<ProductGroupEntity>>> futures = new ArrayList<>(threadCount);
 
-                // 저장된 ID를 엔티티에 매핑
-                for (int i = 0; i < productGroups.size(); i++) {
-                    productGroups.get(i).setId(insertedIds.get(i));
-                }
+        IntStream.range(0, threadCount).forEach(idx ->
+                futures.add(executor.submit(() -> {
+                    if (shouldFail.test(idx)) {
+                        throw new IllegalStateException("Intentional failure: thread " + idx);
+                    }
+                    return insertOneThreadWorth(idx, groupsPerThread);
+                }))
+        );
 
-                return productGroups;
-            });
-            futureResults.add(future);
-        });
+        executor.shutdown();
+        boolean terminated = executor.awaitTermination(AWAIT_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+        assertThat(terminated)
+                .as("ExecutorService should terminate within %d seconds", AWAIT_TIMEOUT_SECONDS)
+                .isTrue();
 
-        // 모든 스레드가 완료될 때까지 대기
-        executorService.shutdown();
-        executorService.awaitTermination(1, TimeUnit.MINUTES);
+        return collectSuccessfulResults(futures, shouldFail);
+    }
 
-        // 각 스레드의 결과 검증
-        for (int threadIndex = 0; threadIndex < futureResults.size(); threadIndex++) {
-            try {
-                List<ProductGroupEntity> insertedGroups = futureResults.get(threadIndex).get();
+    private List<ProductGroupEntity> insertOneThreadWorth(int threadIdx, int count) {
+        List<ProductGroupEntity> groups = IntStream.range(0, count)
+                .mapToObj(i -> new ProductGroupEntity("Thread-" + threadIdx + "-Group-" + i))
+                .toList();
 
-                // 삽입된 상품명 리스트 생성
-                List<String> insertedNames = insertedGroups.stream()
-                        .map(ProductGroupEntity::getProductGroupName)
-                        .toList();
+        List<Long> insertedIds = productGroupJdbcRepository.saveAll(groups);
 
-                // 상품명으로 조회
-                List<ProductGroupEntity> foundGroups = productGroupJdbcRepository.findByProductGroupNames(insertedNames);
+        return IntStream.range(0, groups.size())
+                .mapToObj(i -> groups.get(i).withId(insertedIds.get(i)))
+                .toList();
+    }
 
-                // ID로 매핑
-                Map<Long, ProductGroupEntity> insertedGroupMap = insertedGroups.stream()
-                        .collect(Collectors.toMap(ProductGroupEntity::getId, Function.identity()));
-
-                Map<Long, ProductGroupEntity> foundGroupMap = foundGroups.stream()
-                        .collect(Collectors.toMap(ProductGroupEntity::getId, Function.identity()));
-
-                // ID와 이름 검증
-                insertedGroupMap.forEach((id, insertedGroup) -> {
-                    ProductGroupEntity foundGroup = foundGroupMap.get(id);
-                    assertNotNull(foundGroup, "ID " + id + "로 조회된 상품 그룹이 없습니다.");
-                    assertEquals(insertedGroup.getProductGroupName(), foundGroup.getProductGroupName(),
-                            "ID " + id + "의 상품 그룹 이름이 일치하지 않습니다.");
-                });
-
-                System.out.println("Thread " + threadIndex + " passed verification.");
-            } catch (ExecutionException e) {
-                e.printStackTrace();
+    private List<List<ProductGroupEntity>> collectSuccessfulResults(
+            List<Future<List<ProductGroupEntity>>> futures,
+            IntPredicate shouldFail
+    ) {
+        List<List<ProductGroupEntity>> results = new ArrayList<>();
+        for (int idx = 0; idx < futures.size(); idx++) {
+            Future<List<ProductGroupEntity>> future = futures.get(idx);
+            if (shouldFail.test(idx)) {
+                assertThatFutureFailedAsExpected(future, idx);
+                continue;
             }
+            try {
+                results.add(future.get());
+            } catch (ExecutionException | InterruptedException e) {
+                if (e instanceof InterruptedException) {
+                    Thread.currentThread().interrupt();
+                }
+                fail("Thread %d should have succeeded but threw %s".formatted(idx, e.getCause()));
+            }
+        }
+        return results;
+    }
+
+    private void assertThatFutureFailedAsExpected(Future<List<ProductGroupEntity>> future, int idx) {
+        try {
+            future.get();
+            fail("Thread %d was expected to fail but succeeded".formatted(idx));
+        } catch (ExecutionException expected) {
+            // expected — 실패해야 함
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            fail("Test was interrupted while collecting results");
         }
     }
 
+    private void verifyPersistedDataMatches(List<ProductGroupEntity> insertedGroups) {
+        List<String> names = insertedGroups.stream()
+                .map(ProductGroupEntity::getProductGroupName)
+                .toList();
 
-    @Test
-    void testConcurrentInsertsWithRollback() throws InterruptedException {
-        int threadCount = 100; // 스레드 수
-        int groupsPerThread = 1000; // 각 스레드가 삽입할 그룹 개수
-        int failingThreadIndex = 50; // 실패를 유발할 스레드 번호
+        List<ProductGroupEntity> found = productGroupJdbcRepository.findByProductGroupNames(names);
 
-        // 스레드 풀 생성
-        ExecutorService executorService = Executors.newFixedThreadPool(threadCount);
+        Map<Long, ProductGroupEntity> insertedById = insertedGroups.stream()
+                .collect(Collectors.toMap(ProductGroupEntity::getId, Function.identity()));
+        Map<Long, ProductGroupEntity> foundById = found.stream()
+                .collect(Collectors.toMap(ProductGroupEntity::getId, Function.identity()));
 
-        // 결과 저장 리스트
-        List<Future<List<ProductGroupEntity>>> futureResults = new ArrayList<>();
+        assertThat(foundById.keySet())
+                .as("저장된 모든 PK가 DB에서 조회되어야 함")
+                .containsAll(insertedById.keySet());
 
-        // 각 스레드에서 실행할 작업 정의
-        IntStream.range(0, threadCount).forEach(threadIndex -> {
-            Future<List<ProductGroupEntity>> future = executorService.submit(() -> {
-                // 고유 데이터 생성 (스레드별 구분을 위해 이름에 스레드 ID 포함)
-                List<ProductGroupEntity> productGroups = EasyRandomUtils.getInstance()
-                        .objects(ProductGroupEntity.class, groupsPerThread)
-                        .peek(group -> group.setProductGroupName("Thread-" + threadIndex + "-" + group.getProductGroupName()))
-                        .toList();
-
-                if (threadIndex == failingThreadIndex) {
-                    // 실패를 유발하기 위해 예외 발생
-                    throw new RuntimeException("Intentional failure in thread " + threadIndex);
-                }
-
-                // 저장
-                List<Long> insertedIds = productGroupJdbcRepository.saveAll(productGroups);
-
-                // 저장된 ID를 엔티티에 매핑
-                for (int i = 0; i < productGroups.size(); i++) {
-                    productGroups.get(i).setId(insertedIds.get(i));
-                }
-
-                return productGroups;
-            });
-            futureResults.add(future);
-        });
-
-        // 모든 스레드가 완료될 때까지 대기
-        executorService.shutdown();
-        executorService.awaitTermination(1, TimeUnit.MINUTES);
-
-        // 각 스레드의 결과 검증
-        for (int threadIndex = 0; threadIndex < futureResults.size(); threadIndex++) {
-            try {
-                if (threadIndex == failingThreadIndex) {
-                    // 실패한 스레드는 예외가 발생해야 함
-                    int idx = threadIndex;
-                    assertThrows(ExecutionException.class, () -> futureResults.get(idx).get(),
-                            "Thread " + threadIndex + " should have failed.");
-                    continue;
-                }
-
-                // 성공한 스레드의 결과 검증
-                List<ProductGroupEntity> insertedGroups = futureResults.get(threadIndex).get();
-
-                // 삽입된 상품명 리스트 생성
-                List<String> insertedNames = insertedGroups.stream()
-                        .map(ProductGroupEntity::getProductGroupName)
-                        .toList();
-
-                // 상품명으로 조회
-                List<ProductGroupEntity> foundGroups = productGroupJdbcRepository.findByProductGroupNames(insertedNames);
-
-                // ID로 매핑
-                Map<Long, ProductGroupEntity> insertedGroupMap = insertedGroups.stream()
-                        .collect(Collectors.toMap(ProductGroupEntity::getId, Function.identity()));
-
-                Map<Long, ProductGroupEntity> foundGroupMap = foundGroups.stream()
-                        .collect(Collectors.toMap(ProductGroupEntity::getId, Function.identity()));
-
-                // ID와 이름 검증
-                insertedGroupMap.forEach((id, insertedGroup) -> {
-                    ProductGroupEntity foundGroup = foundGroupMap.get(id);
-                    assertNotNull(foundGroup, "ID " + id + "로 조회된 상품 그룹이 없습니다.");
-                    assertEquals(insertedGroup.getProductGroupName(), foundGroup.getProductGroupName(),
-                            "ID " + id + "의 상품 그룹 이름이 일치하지 않습니다.");
-                });
-
-                System.out.println("Thread " + threadIndex + " passed verification.");
-            } catch (ExecutionException e) {
-                if (threadIndex != failingThreadIndex) {
-                    e.printStackTrace();
-                    fail("Unexpected failure in thread " + threadIndex);
-                }
-            }
-        }
+        insertedById.forEach((id, expected) ->
+                assertThat(foundById.get(id))
+                        .as("ID %d 의 이름이 일치해야 함", id)
+                        .isNotNull()
+                        .extracting(ProductGroupEntity::getProductGroupName)
+                        .isEqualTo(expected.getProductGroupName())
+        );
     }
-
-
 }
