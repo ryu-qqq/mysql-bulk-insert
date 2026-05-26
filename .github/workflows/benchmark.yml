@@ -1,12 +1,9 @@
 name: JMH Benchmark
 
-# 트리거:
-# - 수동 (workflow_dispatch) — 기본
-# - 매월 1일 자동 (cron) — 의존성/JVM 업데이트 후 변동 감지용
+# 트리거: 수동 실행만 (의존성/JVM 업데이트 후 성능 회귀 확인 시)
+# 자동 cron 미설정 — 코드 변화 없으면 결과도 같음, CI 비용만 발생.
 on:
   workflow_dispatch:
-  schedule:
-    - cron: '0 0 1 * *'  # 매월 1일 00:00 UTC
 
 permissions:
   contents: write  # 차트 SVG commit 위해

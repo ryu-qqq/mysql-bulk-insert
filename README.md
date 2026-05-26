@@ -84,17 +84,8 @@ ProductGroup 저장 → PK 받음 → 그 PK로 Product N건 저장
 
 ![JMH Benchmark](docs/benchmarks/jmh-results.svg)
 
-> 차트는 GitHub Actions ([benchmark.yml](.github/workflows/benchmark.yml)) 가 매월 1일 자동 실행하여 갱신.
-> 수동 실행: Repo `Actions` 탭 → `JMH Benchmark` → `Run workflow`.
-
-#### Flame Graph (참고 — IntelliJ Profiler 초기 측정)
-
-| JPA | JDBC |
-|-----|------|
-| ![JPA](docs/images/jpa_performance_flame.png) | ![JDBC](docs/images/jdbc_performance_flame.png) |
-
-JPA는 개별 `persist` 호출이 반복되며 시간이 누적되는 패턴.
-JDBC는 단일 `batchUpdate` 호출에서 끝나며 평탄한 프로파일을 보여줌.
+> 차트 재생성: Repo `Actions` 탭 → `JMH Benchmark` → `Run workflow` (수동).
+> 의존성/JVM 업데이트 후 성능 변화 확인 시 실행.
 
 ---
 
